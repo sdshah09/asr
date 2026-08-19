@@ -696,7 +696,7 @@ Choose ONNX Runtime when portability matters more than peak speed: Whisper insid
 Traced with `trace_whisper.py` on `large-v3-turbo`. Input: 2.89 seconds of *"Machine learning turns sound into text."*
 
 ```bash
-~/.local/share/uv/tools/mlx-whisper/bin/python trace_whisper.py your_audio.m4a
+.venv/bin/python trace_whisper.py your_audio.m4a
 ```
 
 ## Stage 1 — file becomes numbers
@@ -944,6 +944,72 @@ float32             2.34s   0.266     4456  identical
 That last row is the real production tradeoff: you optimize **workers per machine**, not one transcription. Halving memory per worker doubles concurrency, which usually beats a 24% single-stream gain.
 
 **The meta-lesson.** A confident, widely-repeated rule was wrong on this hardware. Twenty minutes of measurement beat the heuristic. **Treat every optimization claim in these notes as a hypothesis until `bench.py` confirms it on your hardware with your audio.**
+
+### Phase 0 results — break it deliberately
+
+Ran 10 adversarial cases (`make_hard_testset.py` + `break_it.py`), each with VAD off and on.
+
+**1. Silence hallucinated — confirmed.**
+```
+01_silence_30s  [vad off]  ->  'Thank you.'
+01_silence_30s  [vad on ]  ->  ''            (and 3.5x faster: 2.8s -> 0.8s)
+```
+30 seconds of digital silence produced words. Training-data prior firing with zero acoustic evidence.
+
+**2. The best finding — VAD off DUPLICATED a sentence.**
+```
+02_speech_in_silence  [vad off]  ->  'The patient was prescribed 40 milligrams of atorvastatin daily.
+                                      The patient was prescribed 40 milligrams of atorvastatin daily.'
+02_speech_in_silence  [vad on ]  ->  'The patient was prescribed 40 milligrams of atorvastatin daily.'
+```
+The audio contains that sentence **once**, at t=20s inside 60s of silence. Whisper emitted it **twice** — the chunk-seam problem made visible: the sentence sits near a 30s boundary, appears in two chunks, and `condition_on_previous_text` carried it forward. **In a medical or legal transcript a duplicated dosage line is a serious error, and nothing about the output looks wrong.**
+
+The `LOOPING` detector in `break_it.py` missed it (2 repetitions, threshold is 3). A real false negative in the harness — fix before Phase 6.
+
+**3. Stereo downmix corrupted a word.**
+```
+06_stereo_two_speakers  ->  'atorvastatin data'    (should be 'daily')
+```
+Not dropped — **replaced**. Silent corruption is worse than an obvious failure.
+
+**4. Second speaker vanished entirely.**
+```
+05_overlapping  ->  'The patient was prescribed 40 mg of atorvastatin daily.'
+```
+Speaker B's sentence is simply absent. No diarization, no warning, no partial capture.
+
+**5. Normalization is inconsistent — a Phase 6 landmine.**
+```
+'40 milligrams'   <- cases 02, 03, 04, 07
+'40 mg'           <- cases 05, 06, 09, 10
+```
+Identical content, two spellings, decided by acoustic conditions. If the WER harness does not normalize this, you measure noise and call it signal.
+
+**Where predictions were wrong.** Very quiet speech (4% volume) transcribed perfectly with VAD on — Silero is more sensitive than expected. Noise, clipping and 320 wpm all transcribed perfectly too. Three of ten "adversarial" cases were not adversarial at all. Useful: it locates the real edges rather than the assumed ones.
+
+**RTF is monotonic with file length.**
+```
+07_fast_speech    2.3s audio  ->  RTF 1.25   <- worst
+03/04/05/10       3.9s audio  ->  RTF ~0.75
+09_long_repeated  161s audio  ->  RTF 0.21   <- best
+```
+Every short file pays the full 30-second padding cost; long files amortize it. Same model, same machine, **6x RTF difference driven purely by input length.** If your workload is short clips, batching is not an optimization — it is the difference between viable and not.
+
+### Phase 1 results — real audio
+
+Two 30-second mp3 clips (44.1 kHz stereo, edited explainer videos):
+
+| test set | config | RTF | speed |
+|---|---|---|---|
+| real audio | int8, vad off | **0.166** | 6.0x |
+| real audio | int8, vad on | 0.174 | 5.8x |
+| synthetic (2.9-81s) | int8 | 0.542 | 1.8x |
+
+**Real audio is 3x better than the synthetic baseline** — 30-second files fill the window instead of paying for padding.
+
+**VAD made real audio slightly SLOWER** (0.166 -> 0.174). These are dense edited clips with no silence to skip, so VAD costs a little and saves nothing. Compare with the sparse cases above, where it was up to 3.5x faster and fixed both hallucination and duplication. **VAD's value is entirely a property of your audio, not of the model.**
+
+**Two same-length files differed 2.2x in RTF** (0.102 vs 0.228). Both ~30s, but one has far more speech. Decoder cost scales with **token count**, not audio duration — so RTF depends on how much was said, not how long the file is. Another reason a single aggregate RTF is a poor summary.
 
 ## Phase 3 — Scaling out (weeks 3–4)
 

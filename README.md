@@ -28,36 +28,50 @@ Part 2 covers: sound and recording, wave-to-picture (FFT, mel, spectrograms), ne
 
 ```bash
 brew install ffmpeg
-uv tool install mlx-whisper                        # Apple GPU path, for the traces
-uv venv .venv && uv pip install --python .venv/bin/python faster-whisper
+uv venv .venv
+uv pip install --python .venv/bin/python faster-whisper mlx-whisper
 ```
+
+One environment for everything: `.venv/bin/python` runs every script here.
+Note your shell default `python3` is Anaconda — `pip install` from a plain
+shell lands there, not in `.venv/`, and imports will fail.
 
 ## Run
 
 ```bash
 # trace the pipeline on any audio
-~/.local/share/uv/tools/mlx-whisper/bin/python trace_whisper.py audio.m4a
+.venv/bin/python trace_whisper.py audio.m4a
 
 # zoom in on the spectrogram step
-~/.local/share/uv/tools/mlx-whisper/bin/python trace_mel.py
+.venv/bin/python trace_mel.py
 
 # benchmark (generates a synthetic test set on first run)
 .venv/bin/python bench.py
-.venv/bin/python bench.py --compute-type float32 --vad
+.venv/bin/python bench.py realset --vad
+
+# build the adversarial set and run it
+python3 make_hard_testset.py
+.venv/bin/python break_it.py
 ```
 
 ## Measured baseline
 
 M4 Pro, 24 GB, CPU only, `large-v3-turbo`, synthetic test set:
 
-| config | RTF | peak mem |
-|---|---|---|
-| int8, 10 threads | 0.542 | 2256 MB |
-| float32, 10 threads | 0.266* | 4456 MB |
+| test set | config | RTF | speed |
+|---|---|---|---|
+| real audio (2x 30s mp3) | int8, vad off | **0.166** | 6.0x |
+| real audio | int8, vad on | 0.174 | 5.8x |
+| synthetic (2.9-81s) | int8 | 0.542 | 1.8x |
+| synthetic, medium clip | float32 | 0.266 | — |
 
-\* on the medium clip. **float32 is faster than int8 on Apple Silicon** — the opposite of the usual rule, because bandwidth is not the bottleneck here. See Part 5 for why.
+Three findings that contradict common advice, all measured here:
 
-Two caveats on every number above: the test set is synthetic TTS (unrealistically clean), and `faster-whisper` on Mac is CPU-only. Replace with real audio before drawing conclusions.
+1. **Default thread count cost 4-5x.** CTranslate2 uses all 14 logical cores; pinning to the 10 performance cores dropped an 8s clip from 8-17s to a steady 3.0s.
+2. **float32 beats int8 on Apple Silicon** (24% faster, identical transcripts). The "int8 is faster" rule assumes memory bandwidth is the bottleneck. It isn't here.
+3. **VAD made real audio slightly slower** (0.166 -> 0.174). These clips are dense edited speech with no silence to skip, so VAD costs a little and saves nothing. On sparse audio it was up to 3.5x faster and fixed both hallucination and duplication.
+
+`faster-whisper` on Mac is CPU-only — the GPU sits idle. `mlx-whisper` uses it.
 
 ## Next
 
