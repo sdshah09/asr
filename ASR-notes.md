@@ -6,6 +6,130 @@ How Whisper turns sound into text, and how to ship it in production.
 
 ---
 
+# Revision card — read this first, or alone
+
+Everything below in one page. If you only re-read one section, make it this one.
+
+## The model in four steps
+
+```
+sound  ->  picture  ->  understanding  ->  text
+```
+
+1. **Turn sound into a picture.** Audio is a wiggle; wiggles are hard to read. Redraw it as a picture — low sounds at the bottom, high at the top, loud is bright. Every vowel and consonant makes a distinctive shape.
+2. **Look at the picture.** The **encoder** scans it and builds an internal sense of what sounds happened. Runs **once**.
+3. **Write the words.** The **decoder** types one word-piece at a time, looking at both the sound picture and what it has already written. Runs **once per token**.
+4. **Stop** on a special end token.
+
+## The one idea that explains everything else
+
+Whisper does not match sounds to words like a dictionary. **It guesses the next word using the audio AND the sentence so far.**
+
+There is nothing to "copy" — the audio contains no word boundaries, no spelling, no capitals, no punctuation. All of that is reconstructed.
+
+That guessing is why it survives noise. It is also why it invents text on silence. **The robustness and the hallucination are the same feature.**
+
+## Numbers worth memorising
+
+| Number | What |
+|---|---|
+| **16,000 Hz** | sample rate. Speech lives below 8 kHz; Nyquist says sample at 2x |
+| **30 seconds** | the input window. ALWAYS. Shorter audio is zero-padded |
+| **480,000** | samples in that window (30 x 16,000) |
+| **25 ms / 10 ms** | FFT window size / hop between windows (so they overlap) |
+| **3000 x 128** | the spectrogram: time slices x pitch buckets |
+| **1500 x 1280** | encoder output: positions x features (conv halves 3000; 20 ms each) |
+| **1 vs N** | encoder passes vs decoder passes. Decoder runs once per token |
+
+## Where the time goes (measured, real 30s clip)
+
+```
+ffmpeg decode        0.088s   1.8%
+spectrogram          0.002s   0.0%    <- free
+ENCODER              1.045s  21.6%    <- runs once
+DECODER              3.700s  76.5%    <- runs 137 times, 27 ms each
+```
+**The decoder is 3/4 of the work.** That is why `turbo` cuts the decoder 32 layers -> 4 and leaves the encoder alone.
+
+## Key terms in one line each
+
+| Term | Meaning |
+|---|---|
+| **transcribe** | turn audio into text |
+| **inference** | using a trained model (vs training it) |
+| **token** | one piece of text the model writes, often a word-piece |
+| **encoder / decoder** | the half that listens / the half that writes |
+| **self-attention** | decoder looking at what it already wrote (context) |
+| **cross-attention** | decoder looking at the audio (evidence) |
+| **spectrogram** | the audio redrawn as a picture |
+| **frame / window / slice** | all the same thing: one 25 ms piece of audio |
+| **bin / band / bucket** | all the same thing: one pitch range |
+| **RTF** | time taken / audio length. Lower is better. Above 1.0 = slower than listening |
+| **VAD** | filter that finds speech so you skip silence |
+| **quantization** | storing weights less precisely to save space |
+| **hallucination** | the model writing words that were never spoken |
+| **WER** | word error rate — the accuracy metric |
+
+## What we measured that contradicts common advice
+
+1. **Default thread count cost 4-5x.** CTranslate2 used all 14 logical cores; pinning to the 10 performance cores took an 8s clip from 8-17s (unstable) to a steady 3.0s.
+2. **"int8 is faster" is not universal.** On a short synthetic clip float32 won by 24%. On real audio int8 won by 4x — because float32 hallucinated 28 extra seconds of content.
+3. **VAD's value is a property of your audio, not the model.** 3.5x faster on silent files; slightly slower on dense narration.
+4. **Short files are disproportionately expensive.** RTF 1.25 at 2.3s vs 0.21 at 161s — because every file pays the full 30-second padding cost.
+5. **Precision changes the decoding path, not just speed.** Tiny numerical differences flip threshold decisions (is this silence? is this repetitive?) which cascade into completely different output.
+6. **The anti-looping safeguard causes instability.** On repetitive audio the compression-ratio check fires, retries with randomness, and output changes every run. Costs 3-4x. `temperature=[0.0]` for reproducibility.
+
+## The five ways it broke
+
+| Failure | What happened |
+|---|---|
+| **Hallucination** | 30s of silence -> `'Thank you.'` |
+| **Duplication** | a sentence present ONCE was transcribed TWICE (chunk seam) |
+| **Silent corruption** | stereo downmix turned `'daily'` into `'data'` — replaced, not dropped |
+| **Speaker loss** | two overlapping speakers -> one transcribed, one vanished with no warning |
+| **Normalization drift** | same sentence -> `'40 milligrams'` or `'40 mg'` depending on acoustics |
+
+All five are silent — nothing errors, the output just looks fine and is wrong.
+
+## The method, in three lines
+
+```python
+start = time.perf_counter()
+model.transcribe(file)
+elapsed = time.perf_counter() - start
+```
+Change **one** thing. Run again. Compare. Repeat 3x — **if the runs disagree, that disagreement IS the finding.**
+
+## Commands
+
+```bash
+.venv/bin/python bench.py realset --vad     # benchmark
+.venv/bin/python break_it.py                # adversarial suite
+.venv/bin/python stage_timing.py            # where the time goes
+.venv/bin/python trace_whisper.py audio.mp3 # watch the model work
+.venv/bin/python trace_mel.py               # sound -> picture, in detail
+.venv/bin/python quant_demo.py              # quantization on real weights
+python3 make_hard_testset.py                # rebuild the adversarial audio
+```
+
+## Map of this document
+
+| Part | What is in it |
+|---|---|
+| **1** | The whole idea in plain language, 5 minutes |
+| **2.1** | Sound and recording — samples, rate, channels, ffmpeg |
+| **2.2** | Wave to picture — FFT, mel, spectrogram |
+| **2.3** | Network basics — tensors, weights, convolution, tokens |
+| **2.4** | Transformers and attention |
+| **2.5** | Making a prediction — logits, softmax, temperature |
+| **2.6** | Whisper specifics — chunks, special tokens, hallucination, VAD |
+| **2.7** | Hardware, memory, quantization internals, CTranslate2, ONNX |
+| **3** | The pipeline traced with real numbers |
+| **4** | Running it — CLI, Python, every flag |
+| **5** | Production path, 7 phases, plus all measured results |
+
+---
+
 # Part 1 — The whole thing in plain language
 
 ## Whisper does four things
