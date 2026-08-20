@@ -6,3 +6,7 @@ testset/
 *.wav
 *.mp3
 *.m4a
+.DS_Store
+realset/
+ambig/
+hardset/*.wav

@@ -4,7 +4,9 @@ Notes and runnable experiments from working through how Whisper turns sound into
 
 ## Start here
 
-**[ASR-notes.md](ASR-notes.md)** — the whole thing, ~1000 lines.
+**[ASR-notes.md](ASR-notes.md)** — the whole thing. Start with the **Revision card** at the top: the model in four steps, the numbers worth memorising, every term in one line, the measured findings, and the failure modes. One page, re-readable alone.
+
+**[EXPERIMENTS.md](EXPERIMENTS.md)** — component breakdown and experiment matrix for building a dictation system. Nine swappable components, the alternatives for each, and what to measure.
 
 | Part | Contents |
 |---|---|
@@ -22,7 +24,11 @@ Part 2 covers: sound and recording, wave-to-picture (FFT, mel, spectrograms), ne
 |---|---|
 | `trace_whisper.py` | Traces a full transcription stage by stage — real shapes, real token probabilities |
 | `trace_mel.py` | Zooms in on waveform → spectrogram: FFT, mel buckets, pure-tone demo |
-| `bench.py` | Phase 1 benchmark — RTF, peak memory, variance across a test set |
+| `bench.py` | Benchmark — RTF, peak memory, variance across a test set |
+| `make_hard_testset.py` | Builds 10 audio cases designed to make Whisper fail |
+| `break_it.py` | Runs them with VAD on/off, flags hallucination / empty / looping |
+| `stage_timing.py` | Where the time goes — per-stage stopwatch |
+| `quant_demo.py` | Quantization on a real weight matrix, with the error measured |
 
 ## Setup
 
