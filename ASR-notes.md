@@ -918,7 +918,7 @@ The long file got *slower* with 10 threads (37.7s -> 44.2s) while short and medi
 
 **Done when:** you can defend a config choice with your own numbers instead of vibes.
 
-### Phase 2 results — precision sweep (M4 Pro, CPU)
+### Phase 2 results — precision sweep (SUPERSEDED, see below)
 
 `large-v3-turbo`, medium clip (8.79s), beam 1, 10 threads, 4 reps:
 
@@ -1010,6 +1010,170 @@ Two 30-second mp3 clips (44.1 kHz stereo, edited explainer videos):
 **VAD made real audio slightly SLOWER** (0.166 -> 0.174). These are dense edited clips with no silence to skip, so VAD costs a little and saves nothing. Compare with the sparse cases above, where it was up to 3.5x faster and fixed both hallucination and duplication. **VAD's value is entirely a property of your audio, not of the model.**
 
 **Two same-length files differed 2.2x in RTF** (0.102 vs 0.228). Both ~30s, but one has far more speech. Decoder cost scales with **token count**, not audio duration — so RTF depends on how much was said, not how long the file is. Another reason a single aggregate RTF is a poor summary.
+
+### Phase 2 results — CORRECTED, on real audio
+
+The earlier "float32 beats int8" conclusion came from **one 8-second synthetic clip**. It did not survive contact with real audio. Keeping both results here because the correction is the lesson.
+
+**Supported compute types on this machine** (ARM CPU):
+```
+int8           ok
+int8_float32   ok
+float32        ok
+int8_float16   unsupported
+float16        unsupported
+bfloat16       unsupported
+```
+
+**Same real file (30.12s), int8 vs float32:**
+```
+file            ct        words   median     RTF
+synthetic 8.8s  int8         23    2.86s   0.325
+synthetic 8.8s  float32      23    2.12s   0.242   <- float32 wins, matches old finding
+real 30s        int8        105    6.64s   0.221
+real 30s        float32     216   24.36s   0.809   <- float32 4x SLOWER, and 2x the words
+```
+
+**Why the word counts differ — float32 hallucinated 28 seconds of content that does not exist.**
+
+The audio is 30.12s. Whisper's window is 30s, so there is a second chunk holding 0.12s of audio and 29.88s of padding — near-pure silence.
+
+```
+int8      last segment: [29.00 -> 30.00] "Oh."                  <- stops at the end
+float32   last segment: [55.00 -> 58.00] "I'll do it, but..."    <- 28s past the end
+```
+
+Invented segments from the float32 run:
+```
+[30.00 -> 32.00] Let me show you.
+[32.00 -> 34.00] I'm Wrestle to win it right now.
+[38.00 -> 39.00] Why, you won't be at that place.
+[50.00 -> 53.00] It's an angle of art.
+[55.00 -> 58.00] I'll do it, but you'll have time to将 it out.
+```
+That last one contains a Chinese character. Same failure mode as adversarial case 01: silence produces invented text.
+
+**VAD did NOT fix it** (hypothesis tested and rejected): float32 with `vad_filter=True` still ran to 58.00s and produced *more* words (216 vs 165).
+
+**Two independent effects, separated by disabling the fallback:**
+```
+float32, temperature=[0.0]  (greedy only, no fallback):
+  run 0:   5.67s  188 words  ends 58.00s
+  run 1:   5.82s  188 words  ends 58.00s     <- deterministic
+  run 2:   5.95s  188 words  ends 58.00s
+
+float32, default temperature ladder (fallback enabled):
+  run 0:  17.52s  116 words  ends 58.00s
+  run 1:  23.71s  196 words  ends 57.98s     <- random every run
+  run 2:  25.16s  182 words  ends 56.00s
+```
+
+**Effect 1 — the temperature fallback costs 3-4x and destroys reproducibility.** This audio is a novelty song repeating "30 seconds long". The **compression-ratio check** sees the repetition, concludes the model is looping, and retries at higher temperature — which means random sampling. Different dice, different garbage, every run. **The safeguard designed to prevent looping is itself producing unstable output.** For reproducible transcripts, set `temperature=[0.0]` and accept worse handling of genuinely broken audio.
+
+**Effect 2 — float32 hallucinates past the audio end regardless of the fallback.** Greedy-only still ends at 58.00s. int8 never does this on this file.
+
+**Which is actually faster?** Per token, float32 genuinely is faster on this hardware — the original finding holds:
+```
+float32 greedy:  188 words in 5.67s  ->  30 ms/word
+int8:            105 words in 6.50s  ->  62 ms/word
+```
+But 83 of those words were invented. **Faster at producing the wrong answer.**
+
+**Corrected recommendation: use int8.** Not because it is faster per token — it is not — but because on real audio it stayed correct, stayed under the fallback thresholds, and finished in 6.5s while float32 took 25s producing fabricated content.
+
+**The deeper finding: precision does not only change speed, it changes the decoding path.** Tiny numerical differences flip threshold decisions in the no-speech and compression-ratio logic, which cascade into completely different output. Not a documented tradeoff in any table — it only appears when you run your own audio.
+
+### Where the time actually goes
+
+Per-stage timing on the real 30s clip (`stage_timing.py`):
+```
+stage                                        seconds   share
+1. ffmpeg decode (mp3 -> numbers, mono 16k)   0.088s    1.8%
+2. pad to 30s                                 0.000s    0.0%
+3. spectrogram (FFT + mel + log)              0.002s    0.0%
+4. ENCODER (conv + 32 transformer layers)     1.045s   21.6%
+5. DECODER (137 tokens, one pass each)        3.700s   76.5%
+------------------------------------------------------------
+TOTAL                                         4.836s      RTF 0.161
+```
+**The decoder is three quarters of the work**, at 27 ms per token. The parts you would expect to be slow — mp3 decode, spectrogram — are free (0.088s and 0.002s). This is the cost asymmetry in production data, and the reason `turbo` shrinks the decoder and leaves the encoder alone.
+
+### Quantization internals, measured
+
+Real weight matrix, encoder block 0: `(5120, 1280)` = 6,553,600 weights (`quant_demo.py`).
+
+**The algorithm is two lines:**
+```python
+scale = np.abs(w).max(axis=-1, keepdims=True) / 127.0   # one scale per ROW
+q     = np.round(w / scale).astype(np.int8)
+```
+
+**Storage:**
+```
+float32 : 26,214,400 bytes  (26.2 MB)
+int8    :  6,553,600 bytes  ( 6.6 MB)
++ scales:     20,480 bytes  (one float32 per row -> 0.3% overhead)
+                             -> 3.99x smaller
+```
+One scale **per row**, not per matrix. 5120 rows, 5120 scales. Small groups mean a single outlier only damages its own row.
+
+**Real weights going through it:**
+```
+    original    / scale  stored int8     x scale       error
+    0.000308       0.43            0    0.000000   -0.000308   <- vanished
+   -0.027359     -37.98          -38   -0.027375   -0.000016   <- nearly exact
+   -0.005474      -7.60           -8   -0.005763   -0.000289
+   -0.000093      -0.13            0    0.000000   +0.000093   <- vanished
+```
+`0.000308 / scale = 0.43` ticks — **less than one tick**, so it rounds to 0. That weight is gone. **Tiny weights disappear; big weights survive almost exactly.**
+
+**Error, and why it works anyway:**
+```
+weights: mean error 2.56e-04, max 1.80e-03  ->  1.95% average
+layer OUTPUT difference:                        1.14%
+```
+Weights off by 1.95%, output off by only 1.14%. **The errors partially cancel** — a dot product sums thousands of terms, some rounded up, some down. You are summing random errors, which grow far slower than the signal. That is why quantization works at all.
+
+**The matmul — weights are never unpacked back to float:**
+```python
+# float path
+y = x @ W.T
+
+# int8 path
+xq  = round(x / x_scale)                    # quantize the input once
+acc = xq.astype(int32) @ q.T.astype(int32)  # int8 x int8, accumulate in int32
+y   = acc * x_scale * w_scale               # ONE rescale, at the very end
+```
+The multiply-add runs entirely in integers. You rescale once per output value, not once per multiply. So int8's overhead is smaller than "unpack every weight" would suggest: quantize the input, plus one rescale.
+
+**What CTranslate2 actually runs** — hand-written C++ dispatching on CPU features:
+
+| Hardware | Instruction | Does |
+|---|---|---|
+| Intel/AMD | `VPDPBUSD` (AVX512-VNNI) | 64 int8 multiply-adds into int32, one instruction |
+| ARM (M-series) | `SDOT` (NEON) | 16 int8 multiply-adds, one instruction |
+| Older x86 | `VPMADDUBSW` + widening | 2 instructions, slower |
+
+**4x less int8 throughput per instruction on ARM than on AVX512**, while float32 has Apple's AMX matrix units behind it. That is the hardware-level reason int8 does not win on speed here.
+
+Quantized weights are baked into `model.bin` at conversion time — nothing is quantized at load. `compute_type="int8"` selects which file and which kernels.
+
+### int8 vs float32 — the number formats
+
+**int8** — 8 bits, evenly spaced whole numbers: `-128 .. 127`. 256 values, gap of exactly 1.
+
+**int32** — `-2^31 .. 2^31-1`, about ±2.1 billion. Still evenly spaced.
+
+**float32** — 32 bits split three ways:
+```
+[1 sign] [8 exponent] [23 mantissa]
+```
+Stored as `mantissa x 2^exponent` — binary scientific notation.
+- Range: ±3.4 x 10^38 (vastly bigger than 2^32)
+- Precision: ~7 decimal digits
+- **Spacing is NOT even.** Near 1.0 consecutive floats are ~0.0000001 apart; near 1,000,000 they are ~0.06 apart. The gaps grow with magnitude.
+
+int8 gives 256 evenly-spaced slots. float32 gives ~4 billion unevenly-spaced ones, **packed densely near zero** — which is exactly where neural network weights live.
 
 ## Phase 3 — Scaling out (weeks 3–4)
 
