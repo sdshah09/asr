@@ -10,3 +10,4 @@ testset/
 realset/
 ambig/
 hardset/*.wav
+scaleset/

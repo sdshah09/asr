@@ -12,8 +12,8 @@ One report per experiment step. Each records what was run, what came back, what 
 | P1 | [phase1-baseline.md](phase1-baseline.md) | done | Default thread count cost 4-5x |
 | P2 | [phase2-precision.md](phase2-precision.md) | done | float32 hallucinated 28s of content; int8 correct |
 | E1.0 | [exp1-step0-moonshine.md](exp1-step0-moonshine.md) | done | No-padding claim confirmed by one printed shape |
-| E1.1 | scaling test | **next** | does compute scale with audio length? |
-| E1.2 | architecture inspection | todo | where did Moonshine's missing 12M params go? |
+| E1.1 | [exp1-step1-scaling.md](exp1-step1-scaling.md) | done | Whisper = ~180ms padding floor + ~7ms/word; Moonshine 2.6x faster at 1s, 1.27x at 30s |
+| E1.2 | architecture inspection | **next** | where did Moonshine's missing 12M params go? |
 
 ## Template
 

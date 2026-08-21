@@ -31,6 +31,8 @@ Part 2 covers: sound and recording, wave-to-picture (FFT, mel, spectrograms), ne
 | `break_it.py` | Runs them with VAD on/off, flags hallucination / empty / looping |
 | `stage_timing.py` | Where the time goes — per-stage stopwatch |
 | `quant_demo.py` | Quantization on a real weight matrix, with the error measured |
+| `moonshine_hello.py` | Minimal Moonshine transcription — the HuggingFace/PyTorch path |
+| `scaling.py` | Duration vs time for Whisper and Moonshine, with an ASCII plot |
 
 ## Setup
 
