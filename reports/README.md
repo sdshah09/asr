@@ -14,7 +14,7 @@ One report per experiment step. Each records what was run, what came back, what 
 | E1.0 | [exp1-step0-moonshine.md](exp1-step0-moonshine.md) | done | No-padding claim confirmed by one printed shape |
 | E1.1 | [exp1-step1-scaling.md](exp1-step1-scaling.md) | done | Whisper = ~180ms padding floor + ~7ms/word; Moonshine 2.6x faster at 1s, 1.27x at 30s |
 | E1.2 | [exp1-step2-architecture.md](exp1-step2-architecture.md) | done | 92% of savings is the decoder; 10.5M of it is one vocab tensor |
-| E1.3 | vocabulary stress test | **next** | does Moonshine degrade on rare words and names? |
+| E1.3 | [exp1-step3-vocabulary.md](exp1-step3-vocabulary.md) | done | Prediction refuted — the smaller model won, 88.1% vs 84.7% |
 
 ## Template
 

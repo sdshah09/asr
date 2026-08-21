@@ -34,6 +34,7 @@ Part 2 covers: sound and recording, wave-to-picture (FFT, mel, spectrograms), ne
 | `moonshine_hello.py` | Minimal Moonshine transcription — the HuggingFace/PyTorch path |
 | `scaling.py` | Duration vs time for Whisper and Moonshine, with an ASCII plot |
 | `inspect_models.py` | Architecture comparison — parameter split, largest tensors, positional embeddings |
+| `vocab_test.py` | Vocabulary stress test — tokenizer fragments and rare-word accuracy |
 
 ## Setup
 
