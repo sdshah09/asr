@@ -6,6 +6,8 @@ Notes and runnable experiments from working through how Whisper turns sound into
 
 **[ASR-notes.md](ASR-notes.md)** — the whole thing. Start with the **Revision card** at the top: the model in four steps, the numbers worth memorising, every term in one line, the measured findings, and the failure modes. One page, re-readable alone.
 
+**[reports/](reports/)** — one report per experiment step: what was run, the raw numbers, what it means, and what turned out to be wrong. Dated and reproducible.
+
 **[EXPERIMENTS.md](EXPERIMENTS.md)** — component breakdown and experiment matrix for building a dictation system. Nine swappable components, the alternatives for each, and what to measure.
 
 | Part | Contents |
