@@ -33,6 +33,7 @@ Part 2 covers: sound and recording, wave-to-picture (FFT, mel, spectrograms), ne
 | `quant_demo.py` | Quantization on a real weight matrix, with the error measured |
 | `moonshine_hello.py` | Minimal Moonshine transcription — the HuggingFace/PyTorch path |
 | `scaling.py` | Duration vs time for Whisper and Moonshine, with an ASCII plot |
+| `inspect_models.py` | Architecture comparison — parameter split, largest tensors, positional embeddings |
 
 ## Setup
 
