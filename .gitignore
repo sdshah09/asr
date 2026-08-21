@@ -12,3 +12,6 @@ ambig/
 hardset/*.wav
 scaleset/
 vocabset/
+
+# rust build artifacts
+dictate/target/
